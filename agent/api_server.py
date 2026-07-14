@@ -350,6 +350,7 @@ def serve_main(argv: list[str] | None = None) -> int:
             cwd=str(frontend_root),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            shell=_sys.platform == "win32",
         )
         print(f"[dev] Vite PID={vite_proc.pid}")
         print("[dev] Frontend: http://localhost:5173")
@@ -372,8 +373,27 @@ def serve_main(argv: list[str] | None = None) -> int:
     # filter is attached when Uvicorn configures its loggers.
     install_access_log_redaction_filter()
 
+    import signal as _signal
+    import os as _os
+
+    class _Server(uvicorn.Server):
+        """Uvicorn server that hard-exits on the second Ctrl+C (Windows-safe)."""
+
+        def install_signal_handlers(self) -> None:
+            _hits = [0]
+
+            def _sigint(sig, frame):
+                _hits[0] += 1
+                if _hits[0] >= 2:
+                    print("\n[server] Force quit.", flush=True)
+                    _os._exit(0)
+                self.handle_exit(sig, frame)
+
+            _signal.signal(_signal.SIGINT, _sigint)
+            _signal.signal(_signal.SIGTERM, self.handle_exit)
+
     try:
-        uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+        _Server(uvicorn.Config(app, host=args.host, port=args.port, log_level="info")).run()
     finally:
         if vite_proc:
             vite_proc.terminate()
